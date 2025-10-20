@@ -54,7 +54,7 @@ NarrAIve/
 
 ```bash
 git clone https://github.com/Aryu-Tamura/manga-support-ai.git
-cd NarrAIve
+cd manga-support-ai.git
 ```
 
 ---
