@@ -1,0 +1,23 @@
+# === Core runtime ===
+streamlit>=1.37.0
+python-dotenv>=1.0.0
+openai>=1.51.2
+tqdm>=4.66.1
+
+# === Text processing ===
+regex
+beautifulsoup4
+
+# === Data & File Handling ===
+pandas
+numpy
+requests
+
+# === EPUB / Book structure (for future support) ===
+ebooklib>=0.18
+
+# === Logging / Debugging ===
+loguru
+
+# === Optional (for Colab compatibility) ===
+ipywidgets
