@@ -53,7 +53,7 @@ NarrAIve/
 ### 1️⃣ Clone the Repository
 
 ```bash
-git clone https://github.com/Aryu-Tamura/NarrAIve.git
+git clone https://github.com/Aryu-Tamura/manga-support-ai.git
 cd NarrAIve
 ```
 
