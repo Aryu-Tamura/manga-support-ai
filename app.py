@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - optional dependency
 DATA_DIR = Path("data")
 DEFAULT_MODEL = "gpt-4o-mini"
 SUMMARY_GRAIN_OPTIONS = list(range(50, 801, 50))
-MAX_CONTEXT_CHARS = 4000
+MAX_CONTEXT_CHARS: Optional[int] = None
 # LLMを使うプロジェクト（サンプルではなくAPI呼び出し）
 LLM_ENABLED_PROJECT_KEYS = {"project1"}
 PROJECT_DEFINITIONS = [
@@ -213,8 +213,10 @@ def get_panel_slice(project: ProjectData, start: int, end: int) -> List[PanelRec
     return project.panels[start_idx - 1:end_idx]
 
 
-def panels_to_context(panels: List[PanelRecord], limit_chars: int = MAX_CONTEXT_CHARS) -> str:
+def panels_to_context(panels: List[PanelRecord], limit_chars: Optional[int] = MAX_CONTEXT_CHARS) -> str:
     joined = "\n\n".join(f"[{panel.id}] {panel.text}" for panel in panels)
+    if limit_chars is None:
+        return joined
     return joined[:limit_chars]
 
 
@@ -281,7 +283,7 @@ def summarize_section(client: Optional[OpenAI], project: ProjectData, panels: Li
         return f"要約生成でエラーが発生しました: {exc}"
 
 
-def find_character_contexts(project: ProjectData, name: str, limit: int = 3) -> List[Tuple[str, str]]:
+def find_character_contexts(project: ProjectData, name: str, limit: Optional[int] = None) -> List[Tuple[str, str]]:
     hits: List[Tuple[str, str]] = []
     target = name.strip()
     if not target:
@@ -292,7 +294,7 @@ def find_character_contexts(project: ProjectData, name: str, limit: int = 3) -> 
             if len(snippet) > 220:
                 snippet = snippet[:220] + "…"
             hits.append((panel.id, snippet))
-        if len(hits) >= limit:
+        if limit is not None and len(hits) >= limit:
             break
     return hits
 
@@ -358,10 +360,16 @@ def generate_plot_script(
     if not should_use_llm(project, client):
         sample_dialogue = [
             f"【サンプルプロット】範囲: {range_label}",
-            "ナレーション：「ここに場面説明が入ります」",
-            "登場人物A：「セリフ例：状況を伝えるセリフ」",
-            "登場人物B：「セリフ例：リアクションのセリフ」",
-            "ナレーション：「次の場面転換を示す描写」",
+            "Scene 1（導入）",
+            "ナレーション：「舞台設定と感情トーンを描写し、これから出てくる発話の流れを補助します。」",
+            "キャラクターA：「原文にある発話内容を、漫画向けに言い回しだけ整えて書きます。」",
+            "キャラクターB：「相手の発言に対する反応も含め、原文の台詞を削らずに掲載します。」",
+            "ナレーション：「小さなアクションや仕草を補足し、文の冗長さだけ軽く整えます。」",
+            "",
+            "Scene 2（展開）",
+            "キャラクターC：「原文の台詞をベースに、言い回しだけ調整して書きます。」",
+            "キャラクターA：「会話の流れが分かるよう、原文で話している順番を保ってください。」",
+            "ナレーション：「会話の合間を補足し、次の展開に繋がる仕草や視線を短く添えます。」",
         ]
         return "\n".join(sample_dialogue)
 
@@ -378,10 +386,11 @@ def generate_plot_script(
         "----\n"
         "要件:\n"
         "- 話者名：「セリフ」の形式で記述\n"
-        "- 場面転換やアクションは1行で簡潔に\n"
-        "- 未登場キャラでも本文から推測できる範囲で登場可\n"
-        "- 全体で10行前後を目安\n"
-        "- 最後に次の検討ポイントを箇条書きで2項目程度"
+        "- 場面が変わる際は **場面タイトル** を書き、続けて2〜3行で環境・感情・小道具を描写する\n"
+        "- 原文に登場する発話者・セリフは漏らさず全て登場させ、順序も極力維持する（必要に応じて言い回しのみ整える）\n"
+        "- 会話の間には必要最低限のト書きや状況描写を入れて漫画用に補助するが、要約にはしない\n"
+        "- 選択範囲に含まれる出来事・キャラクター・伏線を時系列で網羅し、重要なアクションはト書きで補足する\n"
+        "- 最後に次の検討ポイントを3項目、箇条書きで提示する"
     )
     try:
         response = call_responses_api(client, system_prompt, user_prompt)
@@ -447,7 +456,7 @@ def render_original_overview(project: ProjectData, client: Optional[OpenAI]) -> 
         formatted_summary = emphasize_character_names(summary_value, project)
         st.markdown(formatted_summary.replace("\n", "  \n"))
 
-    with st.expander("参考：選択チャンクの本文（上限あり）", expanded=False):
+    with st.expander("参考：選択チャンクの本文", expanded=False):
         if panels:
             st.write(panels_to_context(panels))
         else:
@@ -493,7 +502,7 @@ def render_character_view(project: ProjectData, client: Optional[OpenAI]) -> Non
         st.write(analysis_value)
 
     contexts = find_character_contexts(project, character.get("Name", ""))
-    with st.expander("参考：本文抜粋（最大3件）", expanded=False):
+    with st.expander("参考：本文抜粋", expanded=False):
         if contexts:
             for pid, snippet in contexts:
                 st.markdown(f"- **{pid}**: {snippet}")
