@@ -12,6 +12,7 @@ beautifulsoup4
 pandas
 numpy
 requests
+python-docx>=0.8.11
 
 # === EPUB / Book structure (for future support) ===
 ebooklib>=0.18
