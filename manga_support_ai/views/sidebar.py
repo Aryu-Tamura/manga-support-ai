@@ -17,8 +17,8 @@ def render_sidebar() -> None:
 
     if not definitions:
         st.sidebar.warning("利用可能なプロジェクトがありません。追加してください。")
-        if st.sidebar.button("プロジェクトを追加する", use_container_width=True):
-            st.session_state["current_view"] = "add_project"
+        if st.sidebar.button("プロジェクトの管理", use_container_width=True):
+            st.session_state["current_view"] = "manage"
         return
 
     project_titles = {item["key"]: item["title"] for item in definitions}
@@ -49,6 +49,6 @@ def render_sidebar() -> None:
 
     st.sidebar.divider()
     st.sidebar.markdown("#### 👤 Demo User")
-    if st.sidebar.button("プロジェクトを追加する", use_container_width=True):
-        st.session_state["current_view"] = "add_project"
-    st.sidebar.caption("テキスト/EPUBから新規プロジェクトを追加できます。")
+    if st.sidebar.button("プロジェクトの管理", use_container_width=True):
+        st.session_state["current_view"] = "manage"
+    st.sidebar.caption("プロジェクトの追加・編集・削除を行えます。")

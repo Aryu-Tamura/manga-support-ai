@@ -129,6 +129,7 @@ class Panel:
     text: str
     type: str = "unknown"
     speaker: str = "unknown"
+    speakers: List[str] = None
     time: str = "unknown"
     location: str = ""
     scene: str = ""
@@ -141,6 +142,8 @@ class Panel:
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
+        if data["speakers"] is None:
+            data["speakers"] = []
         if data["entities"] is None:
             data["entities"] = []
         if data["source_span"] is None:
@@ -155,6 +158,46 @@ def derive_cut_parameters(target: int) -> Tuple[int, int, int, int]:
     cut_min = max(40, int(target * 0.6))
     cut_max = max(cut_min + 50, int(target * 1.6))
     return cut_min, cut_max, target_min, target_max
+
+
+def _split_fallback_chunk(text: str, cut_min: int, cut_max: int) -> List[Tuple[int, int, str]]:
+    """Fallback splitter that preserves coverage within the chunk."""
+    spans: List[Tuple[int, int, str]] = []
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    length = len(normalized)
+    cursor = 0
+    while cursor < length:
+        tentative_end = min(cursor + cut_max, length)
+        split_point = tentative_end
+        if tentative_end < length:
+            window = normalized[cursor:tentative_end]
+            candidates = [
+                window.rfind("\n\n"),
+                window.rfind("。"),
+                window.rfind("、"),
+            ]
+            valid_candidates = [c for c in candidates if c >= cut_min - 1]
+            if valid_candidates:
+                split_point = cursor + max(valid_candidates) + 1
+        segment_raw = normalized[cursor:split_point]
+        segment = segment_raw.strip()
+        if segment:
+            leading = len(segment_raw) - len(segment_raw.lstrip())
+            trailing_end = len(segment_raw.rstrip())
+            start_offset = cursor + leading
+            end_offset = cursor + trailing_end
+            spans.append((start_offset, end_offset, segment))
+        cursor = split_point if split_point > cursor else tentative_end
+    return spans
+
+
+def _detect_global_span(local_value: int, chunk_start: int, chunk_end: int, chunk_size: int) -> int:
+    """Detect whether the reported offset is already absolute."""
+    if local_value < 0:
+        return chunk_start
+    if local_value > chunk_size * 1.5:
+        return local_value
+    return chunk_start + local_value
 
 
 def chunk_for_llm(text: str, window: int = WINDOW, overlap: int = OVERLAP) -> List[Dict[str, int]]:
@@ -243,6 +286,7 @@ def llm_cut_and_label_with_params(
     for idx, ch in enumerate(chunks, start=1):
         start_idx, end_idx = ch["start"], ch["end"]
         chunk_text = full_text[start_idx:end_idx]
+        chunk_size = end_idx - start_idx
         logger.info(f"[CHUNK {idx}/{len(chunks)}] span=({start_idx},{end_idx}) size={end_idx-start_idx}")
 
         try:
@@ -261,21 +305,39 @@ def llm_cut_and_label_with_params(
                 text_local = (item.get("text") or "").strip()
                 if not text_local:
                     continue
-                if len(text_local) > CUT_MAX:
-                    text_local = text_local[:CUT_MAX]
+                if len(text_local) > cut_max:
+                    text_local = text_local[:cut_max]
 
                 loc = item.get("source_local_span", {})
                 ls = int(loc.get("start", 0))
                 le = int(loc.get("end", ls + len(text_local)))
-                gs = start_idx + max(ls, 0)
-                ge = start_idx + max(le, 0)
+                gs = _detect_global_span(ls, start_idx, end_idx, chunk_size)
+                ge = _detect_global_span(le, start_idx, end_idx, chunk_size)
+                if ge <= gs:
+                    ge = gs + len(text_local)
+                if gs < start_idx:
+                    gs = start_idx
+                if ge < gs:
+                    ge = gs
+                if ge > start_idx + chunk_size:
+                    ge = start_idx + chunk_size
+
+                raw_speakers = item.get("speakers")
+                if isinstance(raw_speakers, str):
+                    raw_speakers = [raw_speakers]
+                if not raw_speakers:
+                    fallback_speaker = item.get("speaker", "")
+                    raw_speakers = [fallback_speaker] if fallback_speaker else []
+                speakers_clean = [str(s).strip() for s in (raw_speakers or []) if str(s).strip()]
+                primary_speaker = speakers_clean[0] if speakers_clean else item.get("speaker", "unknown") or "unknown"
 
                 pid = f"c{str(cut_counter).zfill(4)}"
                 panels.append(Panel(
                     id=pid,
                     text=text_local,
                     type=item.get("type", "unknown"),
-                    speaker=item.get("speaker", "unknown"),
+                    speaker=primary_speaker,
+                    speakers=speakers_clean or None,
                     time=item.get("time", "unknown"),
                     location=item.get("location", item.get("scene", "")),
                     scene=item.get("scene", item.get("location", "")),
@@ -300,25 +362,40 @@ def llm_cut_and_label_with_params(
             except Exception:
                 pass
 
-            pid = f"c{str(cut_counter).zfill(4)}"
-            text_fallback = chunk_text.strip()[:cut_max]
-            panels.append(Panel(
-                id=pid,
-                text=text_fallback,
-                type="narration",
-                speaker="unknown",
-                time="unknown",
-                location="",
-                scene="",
-                tone="neutral",
-                emotion="neutral",
-                action="",
-                entities=[],
-                source_span={"start": start_idx, "end": min(start_idx + len(text_fallback), end_idx)},
-                checksum="sha1:" + hashlib.sha1(text_fallback.encode("utf-8")).hexdigest()
-            ))
-            cut_counter += 1
-            logger.warning(f"[CHUNK {idx}] JSON失敗 → フォールバック1カット: {ex}")
+            fallback_segments = _split_fallback_chunk(chunk_text, cut_min, cut_max)
+            if not fallback_segments:
+                stripped = chunk_text.strip()
+                if stripped:
+                    leading = len(chunk_text) - len(chunk_text.lstrip())
+                    trailing_end = len(chunk_text.rstrip())
+                    fallback_segments = [(leading, trailing_end, stripped)]
+                else:
+                    fallback_segments = []
+            for local_start, _, segment_text in fallback_segments:
+                segment_text = segment_text.strip()
+                if not segment_text:
+                    continue
+                pid = f"c{str(cut_counter).zfill(4)}"
+                global_start = start_idx + local_start
+                global_end = min(global_start + len(segment_text), start_idx + chunk_size)
+                panels.append(Panel(
+                    id=pid,
+                    text=segment_text,
+                    type="narration",
+                    speaker="unknown",
+                    speakers=None,
+                    time="unknown",
+                    location="",
+                    scene="",
+                    tone="neutral",
+                    emotion="neutral",
+                    action="",
+                    entities=[],
+                    source_span={"start": global_start, "end": global_end},
+                    checksum="sha1:" + hashlib.sha1(segment_text.encode("utf-8")).hexdigest()
+                ))
+                cut_counter += 1
+            logger.warning(f"[CHUNK {idx}] JSON失敗 → フォールバック {len(fallback_segments)} カット: {ex}")
 
         if progress_bar:
             progress_bar.progress(idx / len(chunks))

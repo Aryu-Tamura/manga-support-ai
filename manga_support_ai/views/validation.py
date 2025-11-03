@@ -71,64 +71,79 @@ def render(project: ProjectData, client) -> None:
     blocks = _get_blocks(project)
 
     st.write("### 要約ブロックの編集")
-    reorder_triggered = False
-    for idx, block in enumerate(blocks):
-        entry_id = block["entry_id"]
-        order_col, summary_col, action_col = st.columns([1, 6, 2])
+    orders = [block.get("order", idx + 1) for idx, block in enumerate(blocks)]
+    block_rows = [
+        {
+            "order": order,
+            "entry_id": block["entry_id"],
+            "summary": block.get("summary", ""),
+        }
+        for order, block in zip(orders, blocks)
+    ]
+    edited = st.data_editor(
+        block_rows,
+        hide_index=True,
+        num_rows="fixed",
+        column_config={
+            "order": st.column_config.NumberColumn("順序", min_value=1, max_value=len(blocks), step=1),
+            "entry_id": st.column_config.NumberColumn("ID", disabled=True),
+            "summary": st.column_config.TextColumn("要約", max_chars=600),
+        },
+        key=f"validation_editor_{project.key}",
+        use_container_width=True,
+    )
 
-        with order_col:
-            order_value = st.number_input(
-                "順序",
-                min_value=1,
-                max_value=len(blocks),
-                value=int(block.get("order", idx + 1)),
-                key=f"order_{project.key}_{entry_id}",
+    edited.sort(key=lambda row: row["order"])
+    id_to_block = {block["entry_id"]: block for block in blocks}
+    new_blocks: List[Dict[str, object]] = []
+    for idx, row in enumerate(edited, start=1):
+        block = id_to_block[row["entry_id"]]
+        block["order"] = idx
+        block["summary"] = row["summary"]
+        new_blocks.append(block)
+    blocks[:] = new_blocks
+
+    selected_id = st.selectbox(
+        "詳細を編集する要約ブロック",
+        options=[block["entry_id"] for block in blocks],
+        format_func=lambda bid: f"ID {bid}",
+        key=f"validation_select_{project.key}",
+    )
+    active_block = next(block for block in blocks if block["entry_id"] == selected_id)
+
+    st.markdown("**要約の編集**")
+    edited_summary = st.text_area(
+        "要約",
+        value=active_block.get("summary", ""),
+        key=f"validation_summary_edit_{project.key}_{selected_id}",
+        height=160,
+    )
+    active_block["summary"] = edited_summary
+
+    with st.expander("表現の変更 (LLM)"):
+        custom_prompt = st.text_area(
+            "表現変更の目的",
+            value="読みやすくする",
+            key=f"validation_prompt_{project.key}_{selected_id}",
+            height=100,
+        )
+        if st.button("LLM案を生成", key=f"validation_generate_{project.key}_{selected_id}"):
+            variants = generate_summary_variations(edited_summary, client, custom_prompt)
+            st.session_state[_state_key("variants", f"{project.key}_{selected_id}")] = variants
+        variants = st.session_state.get(_state_key("variants", f"{project.key}_{selected_id}"), [])
+        if variants:
+            choice = st.selectbox(
+                "候補を選択",
+                options=variants,
+                key=f"validation_variant_choice_{project.key}_{selected_id}",
             )
-            if order_value != block.get("order"):
-                block["order"] = order_value
-                reorder_triggered = True
+            if st.button("この表現を適用", key=f"validation_apply_variant_{project.key}_{selected_id}"):
+                active_block["summary"] = choice
+                st.session_state[f"validation_summary_edit_{project.key}_{selected_id}"] = choice
 
-        with summary_col:
-            summary_value = st.text_area(
-                f"要約 (ID: {entry_id})",
-                value=str(block.get("summary", "")),
-                key=f"summary_{project.key}_{entry_id}",
-                height=100,
-            )
-            block["summary"] = summary_value
+    with st.expander("元のテキスト"):
+        st.write(active_block.get("text", ""))
 
-        with action_col:
-            with st.popover("🖊️", help="表現の変更"):
-                custom_prompt = st.text_area(
-                    "表現変更の目的",
-                    value="読みやすくする",
-                    key=f"prompt_{project.key}_{entry_id}",
-                    height=80,
-                )
-                if st.button("LLM案を生成", key=f"rewrite_{project.key}_{entry_id}"):
-                    variants = generate_summary_variations(summary_value, client, custom_prompt)
-                    st.session_state[_state_key("variants", f"{project.key}_{entry_id}")] = variants
-                variants = st.session_state.get(_state_key("variants", f"{project.key}_{entry_id}"), [])
-                if variants:
-                    choice = st.selectbox(
-                        "候補を選択",
-                        options=variants,
-                        key=f"variant_choice_{project.key}_{entry_id}",
-                    )
-                    if st.button("この表現を適用", key=f"apply_variant_{project.key}_{entry_id}"):
-                        block["summary"] = choice
-                        st.session_state[f"summary_{project.key}_{entry_id}"] = choice
-
-            with st.popover("🗒️", help="元テキストを表示"):
-                st.write(block.get("text", ""))
-
-    if reorder_triggered or st.button("順序を整列"):
-        blocks.sort(key=lambda b: b.get("order", 0))
-        for i, block in enumerate(blocks, start=1):
-            block["order"] = i
-            st.session_state[f"order_{project.key}_{block['entry_id']}"] = i
-
-    # 変更を ProjectData.entries に反映
     summary_map = {block["entry_id"]: block["summary"] for block in blocks}
     for entry in project.entries:
         if entry.id in summary_map:

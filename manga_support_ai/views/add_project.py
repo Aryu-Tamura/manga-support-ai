@@ -12,7 +12,7 @@ from ..llm_services import (
     generate_overall_summary,
 )
 from ..llm_workflow import llm_cut_and_label_with_params
-from ..models import ProjectData, panels_to_entries
+from ..models import EntryRecord, ProjectData, panels_to_entries
 from ..storage import (
     generate_project_key,
     register_project,
@@ -23,8 +23,11 @@ from ..storage import (
 from ..utils import read_uploaded_text
 
 
-def render(client) -> None:
-    st.header("プロジェクトを追加")
+def render(client, *, show_header: bool = True) -> None:
+    if show_header:
+        st.header("プロジェクトを追加")
+    else:
+        st.subheader("プロジェクトを追加")
     if client is None:
         st.error("OpenAI API キーが設定されていません。プロジェクト追加には API キーが必要です。")
         return
@@ -107,17 +110,36 @@ def render(client) -> None:
         glossary = build_character_glossary(characters)
 
         update_status(3, "本文を分割してラベル付けしています…")
-        panels = llm_cut_and_label_with_params(
-            client,
-            full_text,
-            style_hint=style_hint.strip(),
-            character_glossary=glossary,
-            chunk_target=int(chunk_target),
-        )
-        entries = panels_to_entries(
-            panels,
-            canonical_names=[c.get("Name", "") for c in characters],
-        )
+        try:
+            panels = llm_cut_and_label_with_params(
+                client,
+                full_text,
+                style_hint=style_hint.strip(),
+                character_glossary=glossary,
+                chunk_target=int(chunk_target),
+            )
+            entries = panels_to_entries(
+                panels,
+                canonical_names=[c.get("Name", "") for c in characters],
+            )
+        except Exception as exc:  # pragma: no cover - LLM failure fallback
+            logging.warning("LLMによる分割に失敗したためフォールバックします: %s", exc)
+            entries = [
+                EntryRecord(
+                    id=1,
+                    text=full_text,
+                    type="narration",
+                    speakers=[],
+                    time="unknown",
+                    location="",
+                    tone="neutral",
+                    emotion="neutral",
+                    action="",
+                    entities=[],
+                    source_span={"start": 0, "end": len(full_text)},
+                    summary="",
+                )
+            ]
         if not entries:
             st.error("分割結果が空でした。入力テキストを確認してください。")
             return
@@ -139,8 +161,9 @@ def render(client) -> None:
         update_status(5, "ファイルを保存しています…")
         progress_bar.progress(0.9)
         key = generate_project_key(title.strip(), existing_keys)
-        panel_file = DATA_DIR / f"{key}_labeled.json"
-        character_file = DATA_DIR / f"character_{key}.json"
+        project_dir = DATA_DIR / key
+        panel_file = project_dir / "project.json"
+        character_file = project_dir / "characters.json"
 
         project = ProjectData(
             key=key,
@@ -174,7 +197,8 @@ def render(client) -> None:
         update_status(6, "完了しました。")
         st.session_state["current_view"] = "original"
         st.session_state["project_added_notice"] = project.title
-        st.experimental_rerun()
+        st.session_state["current_project"] = key
+        st.rerun()
 
     except Exception as exc:  # pragma: no cover - interactive feedback
         logging.exception("プロジェクト追加中にエラー: %s", exc)

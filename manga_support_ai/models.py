@@ -130,9 +130,30 @@ def panels_to_entries(
     entries: List[EntryRecord] = []
     for idx, panel in enumerate(panels, start=1):
         raw_speaker = getattr(panel, "speaker", "")
-        speakers = []
-        if raw_speaker and raw_speaker.lower() not in ("unknown", "なし", "n/a"):
-            speakers = [_normalize_speaker(raw_speaker, name_map)]
+        raw_list = []
+        panel_speakers = getattr(panel, "speakers", None)
+        if isinstance(panel_speakers, (list, tuple)):
+            raw_list.extend(panel_speakers)
+        elif isinstance(panel_speakers, str) and panel_speakers.strip():
+            raw_list.append(panel_speakers)
+        if not raw_list and raw_speaker:
+            raw_list.append(raw_speaker)
+
+        speakers: List[str] = []
+        seen = set()
+        for candidate in raw_list:
+            name = str(candidate or "").strip()
+            if not name:
+                continue
+            normalised = _normalize_speaker(name, name_map)
+            if not normalised:
+                continue
+            key = normalised.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            speakers.append(normalised)
+
         entries.append(
             EntryRecord(
                 id=idx,

@@ -26,19 +26,6 @@ def render(project: ProjectData, client) -> None:
         with st.expander("作品全体の要約", expanded=True):
             st.write(project.summary)
 
-    if project.entries:
-        st.write("### 要約プレビュー")
-        preview_rows = [
-            {
-                "ID": entry.id,
-                "Summary": entry.summary or entry.text[:120],
-                "Type": entry.type,
-                "Speakers": ", ".join(entry.speakers),
-            }
-            for entry in project.entries[: min(10, project.chunk_count)]
-        ]
-        st.dataframe(preview_rows, use_container_width=True)
-
     col_range, col_grain = st.columns([2, 1])
     with col_range:
         range_mode = st.radio("区間を選択", ["全体", "チャンク範囲"], horizontal=True)

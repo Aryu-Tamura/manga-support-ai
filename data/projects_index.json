@@ -1,0 +1,14 @@
+[
+  {
+    "key": "project_2",
+    "title": "信じていた仲間達にダンジョン奥地で殺されかけたがギフト『無限ガチャ』でレベル９９９９の仲間達を手に入れて元パーティーメンバーと世界に復讐＆『ざまぁ！』します！",
+    "panel_file": "data/project_2/project.json",
+    "character_file": "data/project_2/characters.json"
+  },
+  {
+    "key": "project",
+    "title": "信じていた仲間達にダンジョン奥地で殺されかけたがギフト『無限ガチャ』でレベル９９９９の仲間達を手に入れて元パーティーメンバーと世界に復讐＆『ざまぁ！』します！",
+    "panel_file": "data/project/project.json",
+    "character_file": "data/project/characters.json"
+  }
+]

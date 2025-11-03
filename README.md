@@ -34,9 +34,10 @@ manga-support-ai/
 │       ├── original.py
 │       ├── plot.py
 │       └── sidebar.py
-├── data/                          # 既存サンプルと生成プロジェクトの保存先
-│   ├── character_*.json
-│   ├── *_labeled.json
+├── data/                          # サンプルと生成プロジェクトの保存先
+│   ├── project1/project.json      # サンプル（旧形式ファイルも読み込み対応）
+│   ├── project1/characters.json
+│   ├── ...                        # 新規生成時は `data/<key>/project.json` に保存
 │   └── projects_index.json        # 追加プロジェクトのインデックス（自動生成）
 ├── epub_utils.py                  # EPUB → テキスト変換ユーティリティ
 ├── requirements.txt

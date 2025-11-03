@@ -19,17 +19,6 @@ def render(project: ProjectData, client) -> None:
         st.warning("キャラクターデータが登録されていません。")
         return
 
-    st.write("### 登場人物一覧")
-    character_rows = [
-        {
-            "Name": c.get("Name", ""),
-            "Role": c.get("Role", ""),
-            "Details": c.get("Details", ""),
-        }
-        for c in project.characters
-    ]
-    st.dataframe(character_rows, use_container_width=True)
-
     name_to_character = {c.get("Name", f"キャラ{i}"): c for i, c in enumerate(project.characters, start=1)}
     character_names = list(name_to_character.keys())
     selected_name = st.selectbox("キャラクターを選択", options=character_names)

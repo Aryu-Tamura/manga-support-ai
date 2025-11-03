@@ -8,7 +8,15 @@ from manga_support_ai.llm_services import init_client
 from manga_support_ai.models import ProjectData
 from manga_support_ai.storage import ensure_projects_loaded
 from manga_support_ai.utils import setup_logging
-from manga_support_ai.views import add_project, character, original, plot, sidebar, validation
+from manga_support_ai.views import (
+    add_project,
+    character,
+    manage,
+    original,
+    plot,
+    sidebar,
+    validation,
+)
 
 
 def get_current_project() -> Optional[ProjectData]:
@@ -30,10 +38,12 @@ def main() -> None:
 
     sidebar.render_sidebar()
     view = st.session_state.get("current_view", "original")
-    project = None if view == "add_project" else get_current_project()
+    project = None if view in ("add_project", "manage") else get_current_project()
 
     if view == "add_project":
         add_project.render(client)
+    elif view == "manage":
+        manage.render(client)
     elif project is None:
         st.warning("プロジェクトが読み込まれていません。新しいプロジェクトを追加してください。")
     else:
@@ -50,7 +60,7 @@ def main() -> None:
     if notice:
         st.success(f"新しいプロジェクト『{notice}』を追加しました。")
 
-    if client is None and view != "add_project":
+    if client is None and view not in ("add_project", "manage"):
         st.info("OpenAI API キーが未設定のため、生成系機能はサンプルモードで動作します。")
 
 

@@ -7,9 +7,10 @@ from typing import Dict, List, Optional
 
 import streamlit as st
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import APIError, OpenAI, RateLimitError
 
 from . import config
+from .exceptions import LLMUnavailableError
 from .models import EntryRecord, ProjectData, entries_to_context, find_character_contexts
 from .utils import read_json_from_string
 
@@ -63,7 +64,12 @@ def call_responses_api(client: OpenAI, system_prompt: str, user_prompt: str):
         "role": "user",
         "content": [{"type": "input_text", "text": user_prompt}],
     })
-    return client.responses.create(model=config.DEFAULT_MODEL, input=messages)
+    try:
+        return client.responses.create(model=config.DEFAULT_MODEL, input=messages)
+    except RateLimitError as exc:  # pragma: no cover - network failure
+        raise LLMUnavailableError(str(exc)) from exc
+    except APIError as exc:  # pragma: no cover - network failure
+        raise LLMUnavailableError(str(exc)) from exc
 
 
 def extract_text_response(response) -> str:
@@ -226,6 +232,15 @@ def generate_plot_script(
         return f"プロット生成でエラーが発生しました: {exc}"
 
 
+def _local_overall_summary(full_text: str, limit: int = 600) -> str:
+    text = full_text.strip()
+    if not text:
+        return ""
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    preview = " ".join(paragraphs[:3])
+    return preview[:limit] + ("…" if len(preview) > limit else "")
+
+
 def generate_overall_summary(client: OpenAI, title: str, full_text: str) -> str:
     excerpt = full_text.strip()
     if len(excerpt) > 12000:
@@ -241,9 +256,17 @@ def generate_overall_summary(client: OpenAI, title: str, full_text: str) -> str:
         "----\n"
         "上記を踏まえた作品全体の要約を1段落で出力してください。"
     )
-    response = call_responses_api(client, system_prompt, user_prompt)
-    summary = extract_text_response(response)
-    return summary.strip() or "（要約の生成に失敗しました）"
+    try:
+        response = call_responses_api(client, system_prompt, user_prompt)
+        summary = extract_text_response(response).strip()
+        if summary:
+            return summary
+    except LLMUnavailableError as exc:  # pragma: no cover - network failure
+        logging.warning("作品要約の生成に失敗: %s", exc)
+        raise
+    except Exception as exc:  # pragma: no cover - other API errors
+        logging.warning("作品要約の生成でエラー: %s", exc)
+    return _local_overall_summary(excerpt)
 
 
 def extract_primary_characters(
