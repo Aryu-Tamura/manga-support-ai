@@ -13,22 +13,22 @@ import streamlit as st
 logger = logging.getLogger(__name__)
 
 MODEL = "gpt-5-mini"           # 変更可："gpt-4o-mini" など
-CUT_MIN = 100                  # 1カット最小文字数
-CUT_MAX = 220                  # 1カット最大文字数
-TARGET_MIN = 150               # LLMへの理想最小
-TARGET_MAX = 220               # LLMへの理想最大
+CUT_MIN = 100                  # 1カット最小文字数（デフォルト）
+CUT_MAX = 220                  # 1カット最大文字数（デフォルト）
+TARGET_MIN = 150               # LLMへの理想最小（デフォルト）
+TARGET_MAX = 220               # LLMへの理想最大（デフォルト）
 WINDOW = 2000                  # LLMに渡す1チャンクの長さ（~1万文字向け）
 OVERLAP = 150                  # チャンクの重なり
 REQUEST_TIMEOUT = 120.0
 
-LABEL_SYSTEM_PROMPT = f"""あなたは編集者アシスタントです。
+LABEL_SYSTEM_PROMPT_TEMPLATE = """あなたは編集者アシスタントです。
 本文の一部（chunk）を、漫画の「1コマ」に相当するテキスト単位（カット）に分割し、
 各カットへラベルを付けて JSON 配列「のみ」で返してください。
 
 【分割ルール（厳守）】
-- 狙いの長さ帯は {TARGET_MIN}〜{TARGET_MAX} 文字。
-- 絶対条件: 1カットが {CUT_MAX} 文字を超える場合は必ず分割する。
-- ただし SFX（擬音・ト書き）や、単独セリフ（「…」で30字以上）は {CUT_MIN} 未満でも可。
+- 狙いの長さ帯は {target_min}〜{target_max} 文字。
+- 絶対条件: 1カットが {cut_max} 文字を超える場合は必ず分割する。
+- ただし SFX（擬音・ト書き）や、単独セリフ（「…」で30字以上）は {cut_min} 未満でも可。
 - 話者が変わる・地の文と会話が切り替わる・場面（時間/場所）が変わる・トランジション（翌朝/回想）・SFX などを境目候補とする。
 - 1カット内の文数は自由（文数ではなく文字数基準で調整）。
 
@@ -87,6 +87,15 @@ JSON_ARRAY_EXTRACT = re.compile(r"\[\s*{.*}\s*\]", re.DOTALL)
 JSON_OBJECT_EXTRACT = re.compile(r"\{\s*\".*", re.DOTALL)
 
 
+def build_label_system_prompt(target_min: int, target_max: int, cut_min: int, cut_max: int) -> str:
+    return LABEL_SYSTEM_PROMPT_TEMPLATE.format(
+        target_min=target_min,
+        target_max=target_max,
+        cut_min=cut_min,
+        cut_max=cut_max,
+    )
+
+
 def _safe_json_loads(raw: str) -> Optional[List[Any]]:
     txt = (raw or "").strip()
     if txt.startswith("```"):
@@ -139,6 +148,15 @@ class Panel:
         return data
 
 
+def derive_cut_parameters(target: int) -> Tuple[int, int, int, int]:
+    target = max(80, target)
+    target_min = max(50, int(target * 0.75))
+    target_max = max(target_min + 30, int(target * 1.25))
+    cut_min = max(40, int(target * 0.6))
+    cut_max = max(cut_min + 50, int(target * 1.6))
+    return cut_min, cut_max, target_min, target_max
+
+
 def chunk_for_llm(text: str, window: int = WINDOW, overlap: int = OVERLAP) -> List[Dict[str, int]]:
     """LLMに渡すためにテキストをオーバーラップ付きで分割"""
     t = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -158,8 +176,14 @@ def chunk_for_llm(text: str, window: int = WINDOW, overlap: int = OVERLAP) -> Li
     return cuts
 
 
-def _call_llm_chunk(client, chunk_text: str, style_hint: str = "", extra_context: str = "") -> str:
-    messages = [{"role": "system", "content": LABEL_SYSTEM_PROMPT}]
+def _call_llm_chunk(
+    client,
+    chunk_text: str,
+    system_prompt: str,
+    style_hint: str = "",
+    extra_context: str = "",
+) -> str:
+    messages = [{"role": "system", "content": system_prompt}]
     if style_hint:
         messages.append({
             "role": "user",
@@ -183,11 +207,36 @@ def _call_llm_chunk(client, chunk_text: str, style_hint: str = "", extra_context
 
 
 def llm_cut_and_label(client, full_text: str, style_hint: str = "", character_glossary: str = "") -> List[Panel]:
+    return llm_cut_and_label_with_params(client, full_text, style_hint, character_glossary)
+
+
+def llm_cut_and_label_with_params(
+    client,
+    full_text: str,
+    style_hint: str = "",
+    character_glossary: str = "",
+    chunk_target: int = TARGET_MIN,
+    window: int = WINDOW,
+    overlap: int = OVERLAP,
+) -> List[Panel]:
     """本文をチャンクに分割しつつ LLM でカット＋ラベルを生成"""
-    chunks = chunk_for_llm(full_text, WINDOW, OVERLAP)
-    logger.info(f"[START] LLM cut&label | style_hint='{style_hint}' | text_len={len(full_text)} | chunks={len(chunks)}")
-    st.session_state["progress_text"].text(f"LLM準備中… チャンク数: {len(chunks)}")
-    st.session_state["progress_bar"].progress(0)
+    cut_min, cut_max, target_min, target_max = derive_cut_parameters(chunk_target)
+    system_prompt = build_label_system_prompt(target_min, target_max, cut_min, cut_max)
+
+    chunks = chunk_for_llm(full_text, window, overlap)
+    logger.info(
+        "[START] LLM cut&label | style_hint='%s' | text_len=%s | chunks=%s | target=%s",
+        style_hint,
+        len(full_text),
+        len(chunks),
+        chunk_target,
+    )
+    progress_text = st.session_state.get("progress_text")
+    progress_bar = st.session_state.get("progress_bar")
+    if progress_text:
+        progress_text.text(f"LLM準備中… チャンク数: {len(chunks)}")
+    if progress_bar:
+        progress_bar.progress(0.0)
 
     panels: List[Panel] = []
     cut_counter = 1
@@ -197,7 +246,13 @@ def llm_cut_and_label(client, full_text: str, style_hint: str = "", character_gl
         logger.info(f"[CHUNK {idx}/{len(chunks)}] span=({start_idx},{end_idx}) size={end_idx-start_idx}")
 
         try:
-            raw = _call_llm_chunk(client, chunk_text, style_hint=style_hint, extra_context=character_glossary)
+            raw = _call_llm_chunk(
+                client,
+                chunk_text,
+                system_prompt=system_prompt,
+                style_hint=style_hint,
+                extra_context=character_glossary,
+            )
             data = _safe_json_loads(raw)
             if not data:
                 raise ValueError("JSON配列の抽出に失敗")
@@ -246,7 +301,7 @@ def llm_cut_and_label(client, full_text: str, style_hint: str = "", character_gl
                 pass
 
             pid = f"c{str(cut_counter).zfill(4)}"
-            text_fallback = chunk_text.strip()[:CUT_MAX]
+            text_fallback = chunk_text.strip()[:cut_max]
             panels.append(Panel(
                 id=pid,
                 text=text_fallback,
@@ -265,8 +320,10 @@ def llm_cut_and_label(client, full_text: str, style_hint: str = "", character_gl
             cut_counter += 1
             logger.warning(f"[CHUNK {idx}] JSON失敗 → フォールバック1カット: {ex}")
 
-        st.session_state["progress_bar"].progress(idx / len(chunks))
-        st.session_state["progress_text"].text(f"処理中… {idx}/{len(chunks)}")
+        if progress_bar:
+            progress_bar.progress(idx / len(chunks))
+        if progress_text:
+            progress_text.text(f"処理中… {idx}/{len(chunks)}")
 
     logger.info(f"[DONE] panels={len(panels)}")
     return panels
